@@ -4,10 +4,10 @@ name: "lzma"
 version: "0.1"
 maintainer: "Anton Kochkov <anton.kochkov@gmail.com>"
 author: "Anton Kochkov <anton.kochkov@gmail.com>"
-homepage: "https://github.com/XVilka/lzma-ocaml"
-bug-reports: "https://github.com/XVilka/lzma-ocaml/issues"
+homepage: "https://github.com/XVilka/ocaml-lzma"
+bug-reports: "https://github.com/XVilka/ocaml-lzma/issues"
 license: "MIT"
-dev-repo: "https://github.com/XVilka/lzma-ocaml.git"
+dev-repo: "https://github.com/XVilka/ocaml-lzma.git"
 build: [
 	["jbuilder" "subst" "-n" name] {pinned}
 	["jbuilder" "build" "-p" name "-j" jobs]
