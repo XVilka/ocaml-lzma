@@ -170,53 +170,58 @@ type lzma_action =
 (* --------------------------------------------------------------------------- *)
 
 let lzma_init () =
-    let stream = allocate_n lzma_stream ~count:1 in
+    let streamp = allocate_n lzma_stream ~count:1 in
+    let streampp = allocate (ptr lzma_stream) streamp in
     let flags = Unsigned.UInt32.of_int lzma_concatenated in
     let memlimit = Unsigned.UInt64.of_int64 Int64.max_value in
     let res = lzma_ret_of_enum
-        (lzma_initialize stream memlimit flags) in
+        (lzma_initialize (!@ streampp) memlimit flags) in
     match res with
-    | Some LZMA_OK -> Ok stream
+    | Some LZMA_OK -> Ok streampp
     | _ -> Or_error.error_string "Cannot initialize XZ LZMA stream"
 
 
 let lzma_init_auto () =
-    let stream = allocate_n lzma_stream ~count:1 in
+    let streamp = allocate_n lzma_stream ~count:1 in
+    let streampp = allocate (ptr lzma_stream) streamp in
     let flags = Unsigned.UInt32.of_int lzma_concatenated in
     let memlimit = Unsigned.UInt64.of_int64 Int64.max_value in
     let res = lzma_ret_of_enum
-        (lzma_auto_decoder stream memlimit flags) in
+        (lzma_auto_decoder (!@ streampp) memlimit flags) in
     match res with
-    | Some LZMA_OK -> Ok stream
+    | Some LZMA_OK -> Ok streampp
     | _ -> Or_error.error_string "Cannot initialize LZMA stream (AUTO)"
 
 let lzma_init_raw () =
-    let stream = allocate_n lzma_stream ~count:1 in
+    let streamp = allocate_n lzma_stream ~count:1 in
+    let streampp = allocate (ptr lzma_stream) streamp in
     let flags = Unsigned.UInt32.of_int lzma_concatenated in
     let memlimit = Unsigned.UInt64.of_int64 Int64.max_value in
     let res = lzma_ret_of_enum
-        (lzma_auto_decoder stream memlimit flags) in
+        (lzma_auto_decoder (!@ streampp) memlimit flags) in
     match res with
-    | Some LZMA_OK -> Ok stream
+    | Some LZMA_OK -> Ok streampp
     | _ -> Or_error.error_string "Cannot initialize raw LZMA stream"
 
-let lzma_deinit stream =
-    lzma_finalize stream
+let lzma_deinit streampp =
+    lzma_finalize streampp
 
-let lzma_decompress_internal stream action dataptr datasz =
+let lzma_decompress_internal streampp action dataptr datasz =
+    let streamp = (!@ streampp) in
+    let stream = (!@ streamp) in
     let datasize = Unsigned.Size_t.to_int datasz in
     let outbufsize = datasize * 10 in
     let outbuf = CArray.make uint8_t outbufsize in
     let outbufptr = CArray.start outbuf in
     let outbufsz = Unsigned.Size_t.of_int outbufsize in
-    setf (!@ stream) stream_next_in dataptr;
-    setf (!@ stream) stream_avail_in datasz;
-    setf (!@ stream) stream_next_out outbufptr;
-    setf (!@ stream) stream_avail_out outbufsz;
-    let res = lzma_ret_of_enum (lzma_code stream (lzma_action_to_enum action)) in
+    setf stream stream_next_in dataptr;
+    setf stream stream_avail_in datasz;
+    setf stream stream_next_out outbufptr;
+    setf stream stream_avail_out outbufsz;
+    let res = lzma_ret_of_enum (lzma_code streamp (lzma_action_to_enum action)) in
     match res with
     | Some LZMA_OK -> (
-            let totalout = getf (!@ stream) stream_total_out in
+            let totalout = getf stream stream_total_out in
             let tot64 = (Unsigned.UInt64.to_int64 totalout) in
             Printf.printf "LZMA_DEC: uncompressed 0x%x bytes -> 0x%Lx bytes\n"
                 datasize tot64 ;
@@ -233,14 +238,17 @@ let lzma_decompress_internal stream action dataptr datasz =
                 Or_error.error_string "Decompression: output is too big"
     )
     | Some LZMA_MEM_ERROR ->
+            lzma_deinit streampp;
             Or_error.error_string "Decompression: memory allocation failed"
     | Some LZMA_FORMAT_ERROR ->
+            lzma_deinit streampp;
             Or_error.error_string "Decompression: wrong stream format"
     | Some LZMA_OPTIONS_ERROR ->
+            lzma_deinit streampp;
             Or_error.error_string "Decompression: unsupported compression options"
     | Some LZMA_DATA_ERROR -> (
             (* Here we still can have some output *)
-            let totalout = getf (!@ stream) stream_total_out in
+            let totalout = getf stream stream_total_out in
             let tot64 = (Unsigned.UInt64.to_int64 totalout) in
             Printf.printf "LZMA_DEC [corrupted]: uncompressed 0x%x bytes -> 0x%Lx bytes\n"
                 datasize tot64 ;
@@ -250,38 +258,45 @@ let lzma_decompress_internal stream action dataptr datasz =
                 | Some total ->
                     let realout = CArray.sub outbuf 0 total in
                     let outstr = carray_to_string realout in
+                    lzma_deinit streampp;
                     Ok outstr
                 | None ->
+                    lzma_deinit streampp;
                     Or_error.error_string "Decompression: data is corrupt and output is too big"
-            else
+            else begin
+                lzma_deinit streampp;
                 Or_error.error_string "Decompression: data is corrupt and output is too big"
+            end
     )
     | Some LZMA_BUF_ERROR ->
+            lzma_deinit streampp;
             Or_error.error_string "Decompression: compressed data is truncated"
-    | _ -> Or_error.error_string "Decompression: unknown error"
+    | _ ->
+            lzma_deinit streampp;
+            Or_error.error_string "Decompression: unknown error"
 
 let lzma_decompress_xz_ba (ba : data) =
     let action = LZMA_RUN in
     let maybe_stream = lzma_init () in
     match maybe_stream with
-    | Ok stream ->
+    | Ok streampp ->
             let datasize = Bigarray.Array1.dim ba in
             let datasz = Unsigned.Size_t.of_int datasize in
             let datap = Ctypes.bigarray_start array1 ba in
             let dataptr = coerce (ptr char) (ptr uint8_t) datap in
-            lzma_decompress_internal stream action dataptr datasz
+            lzma_decompress_internal streampp action dataptr datasz
     | _ -> Or_error.error_string "Decompression: cannot initialize LZMA stream"
 
 let lzma_decompress_xz_string buf =
     let action = LZMA_RUN in
     let maybe_stream = lzma_init () in
     match maybe_stream with
-    | Ok stream ->
+    | Ok streampp ->
             let datasize = String.length buf in
             let datasz = Unsigned.Size_t.of_int datasize in
             let bufp = CArray.of_string buf in
             let dataptr = coerce (ptr char) (ptr uint8_t) (CArray.start bufp) in
-            lzma_decompress_internal stream action dataptr datasz
+            lzma_decompress_internal streampp action dataptr datasz
     | _ -> Or_error.error_string "Decompression: cannot initialize LZMA stream"
 
 let lzma_decompress_xz_bytes buf =
@@ -291,24 +306,24 @@ let lzma_decompress_auto_ba (ba : data) =
     let action = LZMA_RUN in
     let maybe_stream = lzma_init_auto () in
     match maybe_stream with
-    | Ok stream ->
+    | Ok streampp ->
             let datasize = Bigarray.Array1.dim ba in
             let datasz = Unsigned.Size_t.of_int datasize in
             let datap = Ctypes.bigarray_start array1 ba in
             let dataptr = coerce (ptr char) (ptr uint8_t) datap in
-            lzma_decompress_internal stream action dataptr datasz
+            lzma_decompress_internal streampp action dataptr datasz
     | _ -> Or_error.error_string "Decompression: cannot initialize LZMA stream"
 
 let lzma_decompress_auto_string buf =
     let action = LZMA_RUN in
     let maybe_stream = lzma_init_auto () in
     match maybe_stream with
-    | Ok stream ->
+    | Ok streampp ->
             let datasize = String.length buf in
             let datasz = Unsigned.Size_t.of_int datasize in
             let bufp = CArray.of_string buf in
             let dataptr = coerce (ptr char) (ptr uint8_t) (CArray.start bufp) in
-            lzma_decompress_internal stream action dataptr datasz
+            lzma_decompress_internal streampp action dataptr datasz
     | _ -> Or_error.error_string "Decompression: cannot initialize LZMA stream"
 
 let lzma_decompress_auto_bytes buf =
@@ -318,24 +333,24 @@ let lzma_decompress_raw_ba (ba : data) =
     let action = LZMA_RUN in
     let maybe_stream = lzma_init_raw () in
     match maybe_stream with
-    | Ok stream ->
+    | Ok streampp ->
             let datasize = Bigarray.Array1.dim ba in
             let datasz = Unsigned.Size_t.of_int datasize in
             let datap = Ctypes.bigarray_start array1 ba in
             let dataptr = coerce (ptr char) (ptr uint8_t) datap in
-            lzma_decompress_internal stream action dataptr datasz
+            lzma_decompress_internal streampp action dataptr datasz
     | _ -> Or_error.error_string "Decompression: cannot initialize LZMA stream"
 
 let lzma_decompress_raw_string buf =
     let action = LZMA_RUN in
     let maybe_stream = lzma_init_raw () in
     match maybe_stream with
-    | Ok stream ->
+    | Ok streampp ->
             let datasize = String.length buf in
             let datasz = Unsigned.Size_t.of_int datasize in
             let bufp = CArray.of_string buf in
             let dataptr = coerce (ptr char) (ptr uint8_t) (CArray.start bufp) in
-            lzma_decompress_internal stream action dataptr datasz
+            lzma_decompress_internal streampp action dataptr datasz
     | _ -> Or_error.error_string "Decompression: cannot initialize LZMA stream"
 
 let lzma_decompress_raw_bytes buf =
