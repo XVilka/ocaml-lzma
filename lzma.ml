@@ -84,6 +84,13 @@ let filter_options = field lzma_filter "options" (ptr void);;
 
 let () = seal lzma_filter;;
 
+(* libc free() - because of stupid bug in liblzma *)
+(*
+ * void free (void *ptr)
+ *)
+let libc_free =
+    foreign "free" (ptr void @-> (returning void))
+
 (* --------------------------------------------------------------------------- *)
 
 (* XZ Utils (lzma.h) API *)
@@ -168,43 +175,75 @@ type lzma_action =
     [@@deriving enum]
 
 (* --------------------------------------------------------------------------- *)
+let alloc_stream () =
+    let streamp = allocate_n lzma_stream ~count:1 in
+    if not (is_null streamp) then begin
+        let streampp = allocate (ptr lzma_stream) streamp in
+        if not (is_null streampp) then begin
+            let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
+            let str2 = Ctypes.string_of (ptr lzma_stream) (!@ streampp) in
+            let str3 = Ctypes.string_of lzma_stream (!@ (!@ streampp)) in
+            Printf.printf "alloc_stream (): *%s -> %s\n" str1 str2;
+            Printf.printf "alloc_stream (): %s\n" str3;
+            Some streampp
+        end else None
+    end else None
 
 let lzma_init () =
-    let streamp = allocate_n lzma_stream ~count:1 in
-    let streampp = allocate (ptr lzma_stream) streamp in
     let flags = Unsigned.UInt32.of_int lzma_concatenated in
     let memlimit = Unsigned.UInt64.of_int64 Int64.max_value in
-    let res = lzma_ret_of_enum
-        (lzma_initialize (!@ streampp) memlimit flags) in
-    match res with
-    | Some LZMA_OK -> Ok streampp
-    | _ -> Or_error.error_string "Cannot initialize XZ LZMA stream"
+    match alloc_stream () with
+    | Some streampp -> (
+        let res = lzma_ret_of_enum
+            (lzma_initialize (!@ streampp) memlimit flags) in
+        match res with
+        | Some LZMA_OK -> Ok streampp
+        | _ -> Or_error.error_string "Cannot initialize XZ LZMA stream"
+    )
+    | None -> Or_error.error_string "Cannot allocate XZ LZMA stream"
 
 
 let lzma_init_auto () =
-    let streamp = allocate_n lzma_stream ~count:1 in
-    let streampp = allocate (ptr lzma_stream) streamp in
     let flags = Unsigned.UInt32.of_int lzma_concatenated in
     let memlimit = Unsigned.UInt64.of_int64 Int64.max_value in
-    let res = lzma_ret_of_enum
-        (lzma_auto_decoder (!@ streampp) memlimit flags) in
-    match res with
-    | Some LZMA_OK -> Ok streampp
-    | _ -> Or_error.error_string "Cannot initialize LZMA stream (AUTO)"
+    match alloc_stream () with
+    | Some streampp -> (
+        let res = lzma_ret_of_enum
+            (lzma_auto_decoder (!@ streampp) memlimit flags) in
+        match res with
+        | Some LZMA_OK -> Ok streampp
+        | _ -> Or_error.error_string "Cannot initialize LZMA stream (AUTO)"
+    )
+    | None -> Or_error.error_string "Cannot allocate LZMA stream (AUTO)"
 
 let lzma_init_raw () =
-    let streamp = allocate_n lzma_stream ~count:1 in
-    let streampp = allocate (ptr lzma_stream) streamp in
     let flags = Unsigned.UInt32.of_int lzma_concatenated in
     let memlimit = Unsigned.UInt64.of_int64 Int64.max_value in
-    let res = lzma_ret_of_enum
-        (lzma_auto_decoder (!@ streampp) memlimit flags) in
-    match res with
-    | Some LZMA_OK -> Ok streampp
-    | _ -> Or_error.error_string "Cannot initialize raw LZMA stream"
+    match alloc_stream () with
+    | Some streampp -> (
+        let res = lzma_ret_of_enum
+            (lzma_auto_decoder (!@ streampp) memlimit flags) in
+        match res with
+        | Some LZMA_OK -> Ok streampp
+        | _ -> Or_error.error_string "Cannot initialize raw LZMA stream"
+    )
+    | None -> Or_error.error_string "Cannot allocate raw LZMA stream"
 
 let lzma_deinit streampp =
-    lzma_finalize streampp
+    (* Nullify the "next_in" pointer, stupid LZMA lib
+     * for some reason set it in a wrong value, sigh *)
+    let stream = (!@ (!@ streampp)) in
+    setf stream stream_next_in (from_voidp uint8_t null);
+    let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
+    let str2 = Ctypes.string_of (ptr lzma_stream) (!@ streampp) in
+    let str3 = Ctypes.string_of lzma_stream (!@ (!@ streampp)) in
+    Printf.printf "lzma_deinit (): *%s -> %s\n" str1 str2;
+    Printf.printf "lzma_deinit (): %s\n" str3;
+    Out_channel.flush Out_channel.stdout;
+    (* Because of stupid bug in liblzma to prevent segfaulting
+     * we just free() the data manually *)
+    libc_free (getf stream stream_internal)
+    (* lzma_finalize streampp *)
 
 let lzma_decompress_internal streampp action dataptr datasz =
     let streamp = (!@ streampp) in
@@ -231,9 +270,11 @@ let lzma_decompress_internal streampp action dataptr datasz =
                 | Some total ->
                     let realout = CArray.sub outbuf 0 total in
                     let outstr = carray_to_string realout in
+                    lzma_deinit streampp;
                     Ok outstr
                 | None ->
-                        Or_error.error_string "Output is too big"
+                    lzma_deinit streampp;
+                    Or_error.error_string "Output is too big"
             else
                 Or_error.error_string "Decompression: output is too big"
     )
