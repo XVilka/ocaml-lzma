@@ -4,6 +4,37 @@ open PosixTypes
 open Foreign
 open Printf
 
+(* TODO: Wait for the fix in Ctypes library
+ * see https://github.com/ocamllabs/ocaml-ctypes/issues/476 *)
+
+let add_gc_link ~from ~to_=
+    let r = ref (Some (Obj.repr to_)) in
+    let finaliser _ = r := None in
+    Caml.Gc.finalise finaliser from
+
+let gc_disable () =
+    let gc = Gc.get () in
+    let overhead = Gc.Control.max_overhead gc in
+    Gc.compact ();
+    Gc.tune ~max_overhead:(Int.max_value) ()
+
+let gc_enable () =
+    let gc = Gc.get () in
+    let overhead = Gc.Control.max_overhead gc in
+    Gc.tune ~max_overhead:500 ();
+    Gc.compact ()
+
+let safe_setf s f v =
+    add_gc_link ~from:s ~to_:v;
+    Ctypes.setf s f v
+
+let safe_getf = Ctypes.getf
+
+let safe_coerce t1 t2 ptr =
+    let newptr = Ctypes.coerce t1 t2 ptr in
+    add_gc_link ~from:newptr ~to_:ptr;
+    newptr
+
 (* TODO: Upstream this to Ctypes library
  * see https://github.com/ocamllabs/ocaml-ctypes/pull/573 *)
 
@@ -233,7 +264,7 @@ let lzma_deinit streampp =
     (* Nullify the "next_in" pointer, stupid LZMA lib
      * for some reason set it in a wrong value, sigh *)
     let stream = (!@ (!@ streampp)) in
-    setf stream stream_next_in (from_voidp uint8_t null);
+    (*setf stream stream_next_in (from_voidp uint8_t null); *)
     let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
     let str2 = Ctypes.string_of (ptr lzma_stream) (!@ streampp) in
     let str3 = Ctypes.string_of lzma_stream (!@ (!@ streampp)) in
@@ -242,7 +273,7 @@ let lzma_deinit streampp =
     Out_channel.flush Out_channel.stdout;
     (* Because of stupid bug in liblzma to prevent segfaulting
      * we just free() the data manually *)
-    libc_free (getf stream stream_internal)
+    libc_free (safe_getf stream stream_internal)
     (* lzma_finalize streampp *)
 
 let lzma_decompress_internal streampp action dataptr datasz =
@@ -253,14 +284,14 @@ let lzma_decompress_internal streampp action dataptr datasz =
     let outbuf = CArray.make uint8_t outbufsize in
     let outbufptr = CArray.start outbuf in
     let outbufsz = Unsigned.Size_t.of_int outbufsize in
-    setf stream stream_next_in dataptr;
-    setf stream stream_avail_in datasz;
-    setf stream stream_next_out outbufptr;
-    setf stream stream_avail_out outbufsz;
+    safe_setf stream stream_next_in dataptr;
+    safe_setf stream stream_avail_in datasz;
+    safe_setf stream stream_next_out outbufptr;
+    safe_setf stream stream_avail_out outbufsz;
     let res = lzma_ret_of_enum (lzma_code streamp (lzma_action_to_enum action)) in
     match res with
     | Some LZMA_OK -> (
-            let totalout = getf stream stream_total_out in
+            let totalout = safe_getf stream stream_total_out in
             let tot64 = (Unsigned.UInt64.to_int64 totalout) in
             Printf.printf "LZMA_DEC: uncompressed 0x%x bytes -> 0x%Lx bytes\n"
                 datasize tot64 ;
@@ -289,7 +320,7 @@ let lzma_decompress_internal streampp action dataptr datasz =
             Or_error.error_string "Decompression: unsupported compression options"
     | Some LZMA_DATA_ERROR -> (
             (* Here we still can have some output *)
-            let totalout = getf stream stream_total_out in
+            let totalout = safe_getf stream stream_total_out in
             let tot64 = (Unsigned.UInt64.to_int64 totalout) in
             Printf.printf "LZMA_DEC [corrupted]: uncompressed 0x%x bytes -> 0x%Lx bytes\n"
                 datasize tot64 ;
