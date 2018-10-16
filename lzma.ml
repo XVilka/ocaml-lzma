@@ -1,8 +1,10 @@
+[@@@ocaml.warning "-6"]
+[@@@ocaml.warning "-32"]
+
 open Core
 open Ctypes
 open PosixTypes
 open Foreign
-open Printf
 
 (* TODO: Wait for the fix in Ctypes library
  * see https://github.com/ocamllabs/ocaml-ctypes/issues/476 *)
@@ -13,14 +15,10 @@ let add_gc_link ~from ~to_=
     Caml.Gc.finalise finaliser from
 
 let gc_disable () =
-    let gc = Gc.get () in
-    let overhead = Gc.Control.max_overhead gc in
     Gc.compact ();
     Gc.tune ~max_overhead:(Int.max_value) ()
 
 let gc_enable () =
-    let gc = Gc.get () in
-    let overhead = Gc.Control.max_overhead gc in
     Gc.tune ~max_overhead:500 ();
     Gc.compact ()
 
@@ -101,10 +99,6 @@ let stream_resenum1 = field lzma_stream "reserved_enum1" uint32_t;;
 let stream_resenum2 = field lzma_stream "reserved_enum2" uint32_t;;
 
 let () = seal lzma_stream;;
-
-type lzma_stream_caml = {
-    data : data;
-}
 
 (* lzma_filter *)
 type lzma_filter
@@ -210,6 +204,7 @@ let alloc_stream () =
     let streamp = allocate_n lzma_stream ~count:1 in
     if not (is_null streamp) then begin
         let streampp = allocate (ptr lzma_stream) streamp in
+        add_gc_link ~from:streampp ~to_:streamp;
         if not (is_null streampp) then begin
             let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
             let str2 = Ctypes.string_of (ptr lzma_stream) (!@ streampp) in

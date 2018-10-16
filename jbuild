@@ -1,9 +1,0 @@
-(jbuild_version 1)
-(library
-  ((name lzma)
-   (public_name lzma)
-   (wrapped false)
-   (preprocess (pps (ppx_deriving.std)))
-   (libraries (core ctypes ctypes.foreign hex))
-   (c_library_flags (:standard -Wl,--no-as-needed -llzma))
-   ))

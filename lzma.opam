@@ -9,8 +9,8 @@ bug-reports: "https://github.com/XVilka/ocaml-lzma/issues"
 license: "MIT"
 dev-repo: "https://github.com/XVilka/ocaml-lzma.git"
 build: [
-	["jbuilder" "subst" "-n" name] {pinned}
-	["jbuilder" "build" "-p" name "-j" jobs]
+	["dune" "subst" "-n" name] {pinned}
+	["dune" "build" "-p" name "-j" jobs]
 ]
 depends: [
 	"jbuilder" {build}
