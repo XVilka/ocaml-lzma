@@ -206,11 +206,11 @@ let alloc_stream () =
         let streampp = allocate (ptr lzma_stream) streamp in
         add_gc_link ~from:streampp ~to_:streamp;
         if not (is_null streampp) then begin
-            let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
+            (* let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
             let str2 = Ctypes.string_of (ptr lzma_stream) (!@ streampp) in
             let str3 = Ctypes.string_of lzma_stream (!@ (!@ streampp)) in
             Printf.printf "alloc_stream (): *%s -> %s\n" str1 str2;
-            Printf.printf "alloc_stream (): %s\n" str3;
+            Printf.printf "alloc_stream (): %s\n" str3; *)
             Some streampp
         end else None
     end else None
@@ -258,18 +258,18 @@ let lzma_init_raw () =
 let lzma_deinit streampp =
     (* Nullify the "next_in" pointer, stupid LZMA lib
      * for some reason set it in a wrong value, sigh *)
-    let stream = (!@ (!@ streampp)) in
-    (*setf stream stream_next_in (from_voidp uint8_t null); *)
-    let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
+    (*let stream = (!@ (!@ streampp)) in
+    setf stream stream_next_in (from_voidp uint8_t null); *)
+    (*let str1 = Ctypes.string_of (ptr (ptr lzma_stream)) streampp in
     let str2 = Ctypes.string_of (ptr lzma_stream) (!@ streampp) in
     let str3 = Ctypes.string_of lzma_stream (!@ (!@ streampp)) in
     Printf.printf "lzma_deinit (): *%s -> %s\n" str1 str2;
-    Printf.printf "lzma_deinit (): %s\n" str3;
+    Printf.printf "lzma_deinit (): %s\n" str3; *)
     Out_channel.flush Out_channel.stdout;
     (* Because of stupid bug in liblzma to prevent segfaulting
      * we just free() the data manually *)
-    libc_free (safe_getf stream stream_internal)
-    (* lzma_finalize streampp *)
+    (* libc_free (safe_getf stream stream_internal) *)
+    lzma_finalize streampp
 
 let lzma_decompress_internal streampp action dataptr datasz =
     let streamp = (!@ streampp) in
